@@ -6,6 +6,12 @@ Requests to Ozon run inside an ozon.ru tab of an already running Chrome (via the
 so they use the browser's session, cookies and proxy, and Ozon's anti-bot lets them through.
 Cookies are never extracted from the browser.
 
+## Example
+
+Asking a chat assistant connected to ozon-mcp to check current orders (it calls `orders_summary`):
+
+![Example: current Ozon orders summary](docs/example-orders.png)
+
 ## Tools
 
 | Tool | What it does |
