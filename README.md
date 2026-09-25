@@ -28,6 +28,44 @@ Tool descriptions and responses are in Russian, like Ozon itself.
 
 - Node.js 22+
 - Chrome/Chromium with a remote debugging port (`--remote-debugging-port=9222`), logged in to Ozon
+- [Proxy Tunnel](https://github.com/oleg909902/proxytunnel) if Chrome runs on a server (see below)
+
+### Why Proxy Tunnel
+
+Ozon's anti-bot blocks or constantly challenges traffic from datacenter IPs, so a Chrome on a VPS
+going out through the VPS's own IP doesn't work reliably. [Proxy Tunnel](https://github.com/oleg909902/proxytunnel)
+is an Android app that turns a phone into the server's internet exit: it runs an HTTP proxy on the phone
+and opens a reverse SSH tunnel, so `127.0.0.1:18081` appears on the server and everything sent to it
+goes out through the phone's mobile network. Chrome on the server is launched with this proxy,
+and Ozon sees an ordinary mobile IP.
+
+```
+ozon-mcp ──CDP (:9222)──► Chrome on the server ──proxy 127.0.0.1:18081──► reverse SSH tunnel
+                                                                                │
+                              Ozon ◄── mobile internet ◄── phone (Proxy Tunnel) ◄┘
+```
+
+Setup:
+
+1. Set up the server and the phone as described in the [Proxy Tunnel README](https://github.com/oleg909902/proxytunnel#1-server-setup)
+   and check that the tunnel is up: `curl -x http://127.0.0.1:18081 https://ifconfig.me` shows the phone's IP.
+2. Launch Chrome on the server with the proxy and a local-only debugging port:
+
+   ```bash
+   google-chrome \
+     --user-data-dir="$HOME/chrome-profile" \
+     --proxy-server=http://127.0.0.1:18081 \
+     --remote-debugging-address=127.0.0.1 \
+     --remote-debugging-port=9222 \
+     https://www.ozon.ru/
+   ```
+
+3. Log in to Ozon in this Chrome once (for example over VNC/RDP); the session is kept in the profile.
+4. Point ozon-mcp at the debugging port: run it on the same server with `CDP_URL=http://127.0.0.1:9222`,
+   or forward the port to your machine (next section).
+
+If the phone disconnects, Chrome loses internet access and tools fail with network errors until the tunnel is back.
+Never expose the debugging port to the internet: it gives full control over the browser and its Ozon session.
 
 ## Running
 
