@@ -5,6 +5,7 @@ import { getProductImages, IMAGE_SIZE_NAMES } from "../products/images.js";
 import { getProduct } from "../products/product.js";
 import { getReviews, REVIEW_SORT_NAMES } from "../products/reviews.js";
 import { searchProducts, SEARCH_SORTS } from "../products/search.js";
+import { visualSearch } from "../products/visual-search.js";
 import { jsonResult, READ_ONLY, safe } from "./results.js";
 
 const productArg = z.string().min(1).describe("Ссылка на товар Ozon или артикул (sku)");
@@ -26,10 +27,42 @@ export function registerProductTools(server: McpServer, ozon: OzonClient): void 
             "Сортировка: score — популярные (по умолчанию), price — дешевле, price_desc — дороже, rating — по рейтингу, new — новинки, discount — по скидке"
           ),
         page: z.number().int().min(1).max(20).optional().describe("Номер страницы выдачи, по умолчанию 1"),
+        limit: z.number().int().min(1).max(48).optional().describe("Товаров на странице, по умолчанию 24"),
       },
       annotations: READ_ONLY,
     },
     safe(async (args) => jsonResult(await searchProducts(ozon, args)))
+  );
+
+  server.registerTool(
+    "search_products_visual",
+    {
+      title: "Поиск товаров Ozon по фото (коллаж)",
+      description:
+        "Поиск на Ozon, где выдача приходит ОДНОЙ картинкой-коллажем: фото всех найденных товаров сеткой, на каждой плитке красный номер. " +
+        "Плюс таблица items: номер n → sku, название, цена, рейтинг, ссылка url. " +
+        "Используй, когда важен внешний вид (цвет, форма, фасон, дизайн, «как на фото», «без логотипа», «в стиле …»): " +
+        "посмотри коллаж, выбери подходящие по виду номера и отдай пользователю их url из items (ссылки бери только из items, не придумывай). " +
+        "Номера сквозные: на page=2 продолжаются с limit+1. Чтобы рассмотреть товар подробнее — get_product_images. Ещё товары — page+1 (если есть next_page).",
+      inputSchema: {
+        query: z.string().min(1).describe("Поисковый запрос, например 'кроссовки белые женские'"),
+        sort: z.enum(SEARCH_SORTS).optional().describe("score (по умолчанию), price, price_desc, rating, new, discount"),
+        page: z.number().int().min(1).max(20).optional().describe("Страница (коллаж) по limit товаров, по умолчанию 1"),
+        limit: z.number().int().min(4).max(36).optional().describe("Сколько товаров в коллаже, по умолчанию 24 (больше — мельче плитки, дольше загрузка)"),
+        columns: z.number().int().min(2).max(8).optional().describe("Колонок в сетке (по умолчанию 6, при ≤12 товарах — 4)"),
+        tile_px: z.number().int().min(150).max(500).optional().describe("Размер плитки в px, по умолчанию 300"),
+      },
+      annotations: READ_ONLY,
+    },
+    safe(async (args) => {
+      const { summary, collage } = await visualSearch(ozon, args);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify(summary, null, 1) },
+          ...(collage ? [{ type: "image" as const, data: collage.toString("base64"), mimeType: "image/jpeg" }] : []),
+        ],
+      };
+    })
   );
 
   server.registerTool(

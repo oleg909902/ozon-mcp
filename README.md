@@ -16,7 +16,8 @@ Asking a chat assistant connected to ozon-mcp to check current orders (it calls 
 
 | Tool | What it does |
 |---|---|
-| `search_products(query, sort?, page?)` | search results: sku, name, price, old price, discount, rating, review count, delivery, link |
+| `search_products(query, sort?, page?, limit?)` | search results (24 per page by default, up to 48): sku, name, price, old price, discount, rating, review count, delivery, link |
+| `search_products_visual(query, sort?, page?, limit?, columns?, tile_px?)` | the same search as **one collage image**: product photos in a grid, each tile with a big number, plus a table number → sku, name, price, rating, link. Lets the model pick products by look (colour, shape, design) in a single call |
 | `get_product(product, reviews?)` | everything about a product by link (including `ozon.ru/t/…` short links) or sku: brand, seller, availability, unit price, all characteristics, package contents, variants, description, photos, star distribution and reviews (20 by default) |
 | `get_reviews(product, sort?, page?)` | reviews, 30 per page; `sort`: `useful`, `score_desc`, `score_asc` |
 | `get_product_images(product, limit?, size?)` | product photos as images for the model; `size`: `small` (500 px, default), `medium` (1000), `original` |
@@ -90,6 +91,7 @@ Environment variables:
 | `HOST` | `127.0.0.1` | HTTP server bind address |
 | `PORT` | `3000` | HTTP server port |
 | `OZON_REFRESH_MIN` | `20` | refresh anti-bot cookies every N idle minutes (`0` disables) |
+| `BROWSER_PROXY` | — | Chrome's proxy `host:port` (e.g. Proxy Tunnel `127.0.0.1:18081`); if set and down, errors say the tunnel is down instead of a bare "Failed to fetch" |
 
 ### Chrome on a remote server
 
@@ -123,6 +125,8 @@ src/
     format.ts             parsing prices, links, dates
     sku.ts                sku from an article number or link
   products/             search, product details, reviews, photos
+    collage.ts            photo grid with numbered tiles (sharp)
+    visual-search.ts      search results as one collage + number → product table
   orders/               order list, details, summary, Russian dates
   mcp/                  MCP tool definitions
   transport/http.ts     Streamable HTTP on node:http
@@ -137,3 +141,6 @@ How it works:
    the browser passes it on its own, the tab is closed and the request is retried. While the server is idle,
    anti-bot cookies are refreshed the same way every `OZON_REFRESH_MIN` minutes.
 4. The `products/` and `orders/` modules pick the widgets they need and turn them into plain objects.
+5. Search results come in chunks of ~8 (infinite scroll): the first response has an `infiniteVirtualPaginator`
+   widget with `nextPage`, later ones carry `nextPage` at the top level. Search follows that chain until the page
+   is full and keeps the scroll for 10 minutes, so `page=2` continues it without repeats.

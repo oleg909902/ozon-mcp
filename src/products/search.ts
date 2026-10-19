@@ -1,6 +1,6 @@
 import type { OzonClient } from "../ozon/client.js";
 import { absoluteUrl, parseNumber } from "../ozon/format.js";
-import { widget, type Raw } from "../ozon/page-data.js";
+import { widget, type PageData, type Raw } from "../ozon/page-data.js";
 
 export const SEARCH_SORTS = ["score", "price", "price_desc", "rating", "new", "discount"] as const;
 export type SearchSort = (typeof SEARCH_SORTS)[number];
@@ -25,31 +25,77 @@ export type SearchResult = {
   page: number;
   category: string | null;
   count: number;
+  /** Есть ли ещё товары дальше (page + 1) */
+  has_more: boolean;
   items: SearchItem[];
   /** Подсказки для модели, как уточнить выдачу */
   hints?: string[];
 };
 
+/** Предел запросов к Ozon за один вызов (порция ~8 товаров, ~1,5 с) — чтобы не уйти в бесконечную прокрутку */
+const MAX_CHUNKS_PER_CALL = 12;
+
+/**
+ * Уже прокрученная выдача по запросу: товары по порядку и ссылка на следующую порцию.
+ * Нужна, чтобы page=2 продолжал ту же прокрутку — если начинать с ?page=N, Ozon перемешивает
+ * выдачу и товары повторяются. Живёт 10 минут.
+ */
+type Scroll = { items: SearchItem[]; next: string | null; category: string | null; at: number; seen: Set<string> };
+const SCROLL_TTL_MS = 10 * 60_000;
+const scrolls = new Map<string, Scroll>();
+
+/**
+ * Поиск. Ozon отдаёт выдачу порциями по ~8 товаров (бесконечная прокрутка): первая порция
+ * содержит виджет infiniteVirtualPaginator со ссылкой nextPage, следующие — nextPage в корне ответа.
+ * Идём по цепочке, пока не наберём товары нужной страницы. page — страница из limit товаров.
+ */
 export async function searchProducts(
   ozon: OzonClient,
-  { query, sort, page = 1 }: { query: string; sort?: SearchSort; page?: number }
+  { query, sort, page = 1, limit = 24 }: { query: string; sort?: SearchSort; page?: number; limit?: number }
 ): Promise<SearchResult> {
   const params = new URLSearchParams({ text: query });
   if (sort && sort !== "score") params.set("sorting", sort);
-  if (page > 1) params.set("page", String(page));
-  const data = await ozon.fetchPage(`/search/?${params}`);
+  const key = params.toString();
+  for (const [k, v] of scrolls) if (Date.now() - v.at > SCROLL_TTL_MS) scrolls.delete(k);
 
-  const items: SearchItem[] = (widget(data, "tileGridDesktop")?.items ?? []).map(parseTile);
+  let scroll = scrolls.get(key);
+  if (!scroll || page === 1) {
+    scroll = { items: [], next: `/search/?${params}`, category: null, at: Date.now(), seen: new Set() };
+    scrolls.set(key, scroll);
+  }
+  const need = page * limit;
+  for (let i = 0; scroll.next && scroll.items.length < need && i < MAX_CHUNKS_PER_CALL; i++) {
+    const data = await ozon.fetchPage(scroll.next);
+    if (!scroll.items.length && data.layoutTrackingInfo) scroll.category = JSON.parse(data.layoutTrackingInfo).categoryName ?? null;
+    const tiles = Object.entries(data.widgetStates ?? {})
+      .filter(([k]) => k.startsWith("tileGridDesktop-"))
+      .flatMap(([, v]) => (JSON.parse(v).items ?? []) as Raw[])
+      .map(parseTile);
+    for (const t of tiles) if (!scroll.seen.has(t.sku)) (scroll.seen.add(t.sku), scroll.items.push(t));
+    scroll.next = tiles.length ? nextPagePath(data) : null;
+  }
+  scroll.at = Date.now();
+
+  const items = scroll.items.slice((page - 1) * limit, need);
   const result: SearchResult = {
     query,
     page,
-    category: data.layoutTrackingInfo ? (JSON.parse(data.layoutTrackingInfo).categoryName ?? null) : null,
+    category: scroll.category,
     count: items.length,
+    has_more: scroll.items.length > need || !!scroll.next,
     items,
   };
   const hints = searchHints(sort, items);
   if (hints.length) result.hints = hints;
   return result;
+}
+
+/** Ссылка на следующую порцию выдачи */
+function nextPagePath(data: PageData): string | null {
+  const top = (data as Raw).nextPage;
+  if (typeof top === "string" && top) return top;
+  const paginator = widget(data, "infiniteVirtualPaginator");
+  return paginator?.nextPage || null;
 }
 
 /** Плитка товара в выдаче */
