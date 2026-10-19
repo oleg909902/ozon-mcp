@@ -6,6 +6,8 @@ export const config = {
   port: Number(process.env.PORT ?? 3000),
   /** Раз в сколько минут простоя обновлять cookie антибота (0 — не обновлять) */
   antibotRefreshMin: Number(process.env.OZON_REFRESH_MIN ?? 20),
+  /** Прокси, через который Chrome ходит в интернет (туннель с телефона) — чтобы объяснить, почему нет сети. Пусто — не проверять */
+  browserProxy: process.env.BROWSER_PROXY ?? "",
 };
 
 export type Config = typeof config;

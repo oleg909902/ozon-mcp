@@ -1,6 +1,7 @@
 // Доступ к Ozon через уже запущенный Chrome.
 // Запросы выполняются внутри вкладки ozon.ru — с её cookie, сессией и прокси браузера,
 // поэтому антибот Ozon их пропускает, а cookie никуда не извлекаются.
+import { connect } from "node:net";
 import { Browser, type PageInfo } from "../cdp/browser.js";
 import { BASE_URL } from "./format.js";
 import { SerialQueue } from "./serial-queue.js";
@@ -13,13 +14,35 @@ export class OzonClient {
   // Запросы идут по одному: так меньше шансов нарваться на антибот
   private queue = new SerialQueue();
 
-  constructor(cdpUrl: string) {
+  /** browserProxy — host:port прокси браузера (туннель с телефона), чтобы понятно объяснять обрыв сети */
+  constructor(cdpUrl: string, private browserProxy = "") {
     this.browser = new Browser(cdpUrl);
   }
 
   /** JSON любой страницы Ozon: GET /api/entrypoint-api.bx/page/json/v2?url=<path> */
   fetchPage(path: string): Promise<PageData> {
-    return this.queue.run(async () => {
+    return this.queue.run(() => this.explainNetworkErrors(() => this.fetchPageNow(path)));
+  }
+
+  /** «Failed to fetch» из браузера почти всегда значит, что у Chrome нет сети — чаще всего упал туннель с телефона */
+  private async explainNetworkErrors<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (!/Failed to fetch|NetworkError|ERR_PROXY|ERR_TUNNEL|ERR_INTERNET/i.test(msg)) throw e;
+      if (this.browserProxy && !(await isPortOpen(this.browserProxy))) {
+        throw new Error(
+          `Нет связи с Ozon: прокси браузера ${this.browserProxy} (туннель Proxy Tunnel с телефона) не отвечает. ` +
+            "Нужно перезапустить Proxy Tunnel на телефоне, сам сервер в порядке. Сообщи это пользователю и не повторяй запрос, пока он не скажет, что туннель поднят."
+        );
+      }
+      throw new Error(`Браузер на сервере не смог достучаться до Ozon (${msg}) — похоже, нет интернета или Ozon не отвечает. Попробуй через минуту.`);
+    }
+  }
+
+  private async fetchPageNow(path: string): Promise<PageData> {
+    {
       let { status, data } = await this.fetchJson(path);
       if (isChallenge(data)) {
         // Протухли cookie антибота — проходим проверку во временной вкладке и повторяем
@@ -35,15 +58,17 @@ export class OzonClient {
       }
       if (status >= 400) throw new Error(`Ozon HTTP ${status}`);
       return data;
-    });
+    }
   }
 
   /** Куда ведёт ссылка на ozon.ru после редиректов (для коротких ссылок /t/xxxx) */
   resolveRedirect(path: string): Promise<string> {
-    return this.queue.run(async () => {
-      const page = await this.ozonPage();
-      return this.browser.evaluate(page, async (path) => (await fetch(path, { redirect: "follow" })).url, path);
-    });
+    return this.queue.run(() =>
+      this.explainNetworkErrors(async () => {
+        const page = await this.ozonPage();
+        return this.browser.evaluate(page, async (path) => (await fetch(path, { redirect: "follow" })).url, path);
+      })
+    );
   }
 
   /**
@@ -106,3 +131,15 @@ export class OzonClient {
 }
 
 const isChallenge = (data: PageData) => Boolean(data.incidentId || data.challengeURL);
+
+/** Слушает ли кто-то host:port (прокси туннеля) */
+function isPortOpen(hostPort: string, timeoutMs = 2000): Promise<boolean> {
+  const [host, port] = hostPort.replace(/^\w+:\/\//, "").split(":");
+  return new Promise((resolve) => {
+    const sock = connect({ host, port: Number(port) });
+    const done = (ok: boolean) => (sock.destroy(), resolve(ok));
+    sock.setTimeout(timeoutMs, () => done(false));
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+  });
+}

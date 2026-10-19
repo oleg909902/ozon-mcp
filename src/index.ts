@@ -7,7 +7,7 @@ import { createMcpServer } from "./mcp/server.js";
 import { OzonClient } from "./ozon/client.js";
 import { serveHttp } from "./transport/http.js";
 
-const ozon = new OzonClient(config.cdpUrl);
+const ozon = new OzonClient(config.cdpUrl, config.browserProxy);
 ozon.startAntibotRefresh(config.antibotRefreshMin);
 
 if (process.argv.includes("--stdio")) {
