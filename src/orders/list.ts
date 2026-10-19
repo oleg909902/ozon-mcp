@@ -19,6 +19,8 @@ export type Shipment = {
   storage_until: string | null;
   days_left_to_pick_up?: number | null;
   price: number | null;
+  /** Количество товаров в отправлении ("4 шт") */
+  quantity: number | null;
   image: string | null;
   // Заполняются, если список загружен с товарами
   ordered?: string | null;
@@ -130,13 +132,15 @@ function parseShipment(p: Raw, groupStatus: string | null): Shipment {
   const caption: string | null = p.caption?.text ?? null;
   const storageUntil = caption && /хранится до/i.test(caption) ? parseRuDate(caption) : null;
   return {
-    order_number: query.get("order"),
+    // Ozon менял формат ссылки: было ?order=…&postingId=…, стало /my/orderdetails/?orderNumber=…
+    order_number: query.get("orderNumber") ?? query.get("order"),
     posting_id: query.get("postingId"),
     status: p.badgeStatus?.text ?? groupStatus,
     note: caption,
     storage_until: storageUntil,
     days_left_to_pick_up: storageUntil ? daysUntil(storageUntil) : undefined,
     price: mainPrice(p.price),
+    quantity: parseDigits(p.image?.badge?.text),
     image: p.image?.productMedia?.image?.url ?? null,
   };
 }
